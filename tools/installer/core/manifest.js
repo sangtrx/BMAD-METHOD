@@ -329,8 +329,8 @@ class Manifest {
       });
       const hasGitClone = !!resolved?.repoUrl;
       return {
-        // Prefer the git ref we actually cloned over the package.json version.
-        version: resolved?.cloneRef || (hasGitClone ? 'main' : versionInfo.version),
+        // Prefer an explicit git ref; otherwise surface the module's declared version before the branch fallback.
+        version: resolved?.cloneRef || versionInfo.version || (hasGitClone ? 'main' : null),
         source: 'custom',
         npmPackage: null,
         repoUrl: resolved?.repoUrl || null,
