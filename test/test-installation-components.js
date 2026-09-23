@@ -1925,6 +1925,81 @@ async function runTests() {
     assert(result2.author === 'Fallback Owner', 'normalizeCustomModule falls back to data.owner');
   }
 
+  // --- Manifest.getModuleVersionInfo custom source precedence (#2907) ---
+  {
+    const { Manifest } = require('../tools/installer/core/manifest');
+    const { CustomModuleManager } = require('../tools/installer/modules/custom-module-manager');
+    const manifest = new Manifest();
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'bmad-custom-version-'));
+    const versionedSource = path.join(fixtureRoot, 'versioned');
+    const emptySource = path.join(fixtureRoot, 'empty');
+    const moduleCodes = ['git-unpinned', 'git-pinned', 'git-fallback', 'local-custom'];
+
+    try {
+      await fs.ensureDir(path.join(versionedSource, '.claude-plugin'));
+      await fs.ensureDir(emptySource);
+      await fs.writeFile(
+        path.join(versionedSource, '.claude-plugin', 'marketplace.json'),
+        JSON.stringify(
+          {
+            plugins: [
+              { name: 'git-unpinned', version: '1.2.3' },
+              { name: 'git-pinned', version: '1.2.3' },
+              { name: 'local-custom', version: '4.5.6' },
+            ],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const cacheResolution = (code, sourceDir, sourceFields) => {
+        CustomModuleManager._resolutionCache.set(code, {
+          code,
+          moduleYamlPath: path.join(sourceDir, 'missing-module.yaml'),
+          ...sourceFields,
+        });
+      };
+
+      cacheResolution('git-unpinned', versionedSource, {
+        repoUrl: 'https://github.com/example/custom-modules.git',
+        cloneRef: null,
+        pluginName: 'git-unpinned',
+      });
+      cacheResolution('git-pinned', versionedSource, {
+        repoUrl: 'https://github.com/example/custom-modules.git',
+        cloneRef: 'v9.9.9',
+        pluginName: 'git-pinned',
+      });
+      cacheResolution('git-fallback', emptySource, {
+        repoUrl: 'https://github.com/example/custom-modules.git',
+        cloneRef: null,
+        pluginName: 'git-fallback',
+      });
+      cacheResolution('local-custom', versionedSource, {
+        repoUrl: null,
+        localPath: versionedSource,
+        cloneRef: null,
+        pluginName: 'local-custom',
+      });
+
+      const unpinned = await manifest.getModuleVersionInfo('git-unpinned', fixtureRoot, versionedSource);
+      assert(unpinned.version === '1.2.3', 'Unpinned git custom module uses declared marketplace version');
+
+      const pinned = await manifest.getModuleVersionInfo('git-pinned', fixtureRoot, versionedSource);
+      assert(pinned.version === 'v9.9.9', 'Pinned git custom module keeps explicit clone ref');
+
+      const fallback = await manifest.getModuleVersionInfo('git-fallback', fixtureRoot, emptySource);
+      assert(fallback.version === 'main', 'Git custom module without declared version falls back to main');
+
+      const local = await manifest.getModuleVersionInfo('local-custom', fixtureRoot, versionedSource);
+      assert(local.version === '4.5.6', 'Local custom module keeps declared version behavior');
+    } finally {
+      for (const code of moduleCodes) CustomModuleManager._resolutionCache.delete(code);
+      await fs.remove(fixtureRoot).catch(() => {});
+    }
+  }
+
   console.log('');
 
   // ============================================================
